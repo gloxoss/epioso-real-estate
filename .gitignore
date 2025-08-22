@@ -42,3 +42,6 @@ next-env.d.ts
 
 # YoYo AI version control directory
 .yoyo/
+
+# uploads
+public/uploads/

@@ -1,0 +1,798 @@
+// prisma/schema.prisma
+
+// 1. DSN and Client Generator
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 2. ENUMS (For Type Safety in our App)
+enum Role {
+  owner
+  manager
+  accountant
+  maintainer
+  viewer
+}
+
+enum UnitStatus {
+  available
+  reserved
+  occupied
+  sold
+  maintenance
+  blocked
+}
+
+enum ContactType {
+  tenant
+  owner
+  vendor
+  agent
+  emergency
+  buyer
+  other
+}
+
+enum InvoiceStatus {
+  draft
+  open
+  paid
+  overdue
+  cancelled
+  refunded
+}
+
+enum PaymentMethod {
+  cash
+  bank_transfer
+  credit_card
+  check
+  stripe
+  other
+}
+
+enum TicketPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum DocumentCategory {
+  contract
+  invoice
+  receipt
+  photo
+  report
+  legal
+  maintenance
+  other
+}
+
+enum EntityType {
+  property
+  unit
+  contact
+  invoice
+  ticket
+  payment
+  lead
+  deal
+  agent
+}
+
+enum LeadStatus {
+  new
+  contacted
+  qualified
+  viewing_scheduled
+  viewing_completed
+  offer_made
+  negotiating
+  contract_signed
+  closed_won
+  closed_lost
+  on_hold
+}
+
+enum LeadSource {
+  website
+  referral
+  social_media
+  advertising
+  walk_in
+  phone_call
+  email
+  agent_network
+  other
+}
+
+enum SaleType {
+  full_payment
+  installment_plan
+  mortgage_assisted
+  rent_to_own
+}
+
+enum DealStatus {
+  draft
+  active
+  pending_approval
+  approved
+  contract_signed
+  payment_pending
+  completed
+  cancelled
+  on_hold
+}
+
+enum PaymentPlanStatus {
+  draft
+  active
+  completed
+  defaulted
+  cancelled
+}
+
+enum CommissionStatus {
+  pending
+  approved
+  paid
+  disputed
+  cancelled
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  completed
+  cancelled
+  no_show
+  rescheduled
+}
+
+enum TicketStatus {
+  open
+  in_progress
+  on_hold
+  completed
+  cancelled
+}
+
+// 3. MODELS (Application-level representation of our data)
+
+// NextAuth.js required models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+  password      String?   // For credentials provider
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  accounts         Account[]
+  sessions         Session[]
+  memberships      Member[] // Your app's data
+  unitStatusChanges UnitStatusHistory[]
+  activityLogs     ActivityLog[]
+
+  // Sales relations
+  salesAgentProfile SalesAgent?
+  leadActivities   LeadActivity[]
+
+  @@map("users")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verificationtokens")
+}
+
+model Organization {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  members      Member[]     // Relation back-links
+  properties   Property[]
+  contacts     Contact[]
+  expenses     Expense[]
+  tickets      MaintenanceTicket[]
+  invoices     Invoice[]
+  payments     Payment[]
+  documents    Document[]
+  activityLogs ActivityLog[]
+
+  // Sales relations
+  salesAgents  SalesAgent[]
+  leads        Lead[]
+  deals        SalesDeal[]
+  paymentPlans PaymentPlan[]
+  commissions  Commission[]
+  appointments ViewingAppointment[]
+
+  @@map("organizations")
+}
+
+model Member {
+  organizationId String @map("organization_id") @db.Uuid
+  userId         String @map("user_id")
+  role           Role
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignedTickets MaintenanceTicket[] // A maintainer can be assigned to many tickets
+
+  @@id([organizationId, userId])
+  @@map("organization_members")
+}
+
+model Property {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  name           String
+  address        String?
+  description    String?
+  propertyType   String?   @map("property_type")
+  expectedUnits  Int?      @map("expected_units")
+  imageUrl       String?   @map("image_url")
+  attributes     Json      @default("{}") @db.JsonB
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  units        Unit[]
+  expenses     Expense[]
+  tickets      MaintenanceTicket[]
+
+  // Sales relations
+  leads        Lead[]
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("properties")
+}
+
+model Unit {
+  id          String     @id @default(uuid()) @db.Uuid
+  propertyId  String     @map("property_id") @db.Uuid
+  unitNumber  String     @map("unit_number")
+  status      UnitStatus @default(available)
+  listPrice   Decimal?   @map("list_price") @db.Decimal(12, 2)
+  rentAmount  Decimal?   @map("rent_amount") @db.Decimal(12, 2)
+
+  // Sales-specific fields
+  salePrice      Decimal?    @map("sale_price") @db.Decimal(12, 2)
+  isForSale      Boolean     @default(false) @map("is_for_sale")
+  isForRent      Boolean     @default(true) @map("is_for_rent")
+  assignedAgentId String?    @map("assigned_agent_id") @db.Uuid
+
+  attributes  Json       @default("{}") @db.JsonB
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  property Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+  tickets  MaintenanceTicket[]
+  invoices Invoice[]
+  statusHistory UnitStatusHistory[]
+
+  // Sales relations
+  leads          Lead[]
+  deals          SalesDeal[]
+  appointments   ViewingAppointment[]
+  assignedAgent  SalesAgent? @relation(fields: [assignedAgentId], references: [id], onDelete: SetNull)
+
+  @@unique([propertyId, unitNumber])
+  @@index([status])
+  @@index([isForSale])
+  @@index([assignedAgentId])
+  @@index([createdAt])
+  @@map("units")
+}
+
+model Contact {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  type           ContactType   @default(tenant)
+  name           String
+  email          String?
+  phone          String?
+  address        String?
+
+  // Sales-specific fields
+  leadSource     LeadSource?   @map("lead_source")
+  budget         Decimal?      @db.Decimal(12, 2)
+  timeline       String?       // Expected purchase timeline
+  preferences    Json          @default("{}") @db.JsonB // Property preferences
+  isQualified    Boolean       @default(false) @map("is_qualified")
+
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expenses     Expense[]
+  invoices     Invoice[]
+
+  // Sales relations
+  leads        Lead[]        @relation("ContactLeads")
+  purchases    SalesDeal[]   @relation("BuyerDeals")
+
+  @@index([organizationId])
+  @@index([type])
+  @@index([leadSource])
+  @@index([createdAt])
+  @@map("contacts")
+}
+
+model SalesAgent {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  userId         String    @unique @map("user_id") // Make unique for one-to-one relation
+
+  // Agent details
+  licenseNumber  String?   @map("license_number")
+  commissionRate Decimal   @default(0.03) @map("commission_rate") @db.Decimal(5, 4) // 3% default
+  territory      String?   // Geographic territory
+  isActive       Boolean   @default(true) @map("is_active")
+
+  // Performance tracking
+  totalSales     Decimal   @default(0) @map("total_sales") @db.Decimal(15, 2)
+  totalCommission Decimal  @default(0) @map("total_commission") @db.Decimal(12, 2)
+
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Relations
+  assignedUnits  Unit[]
+  leads          Lead[]
+  deals          SalesDeal[]
+  commissions    Commission[]
+  appointments   ViewingAppointment[]
+
+  @@index([organizationId])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("sales_agents")
+}
+
+model Expense {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  propertyId     String?   @map("property_id") @db.Uuid
+  unitId         String?   @map("unit_id") @db.Uuid
+  description    String
+  amount         Decimal   @db.Decimal(10, 2)
+  category       String?
+  expenseDate    DateTime  @map("expense_date") @db.Date
+  vendorId       String?   @map("vendor_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  unit         Unit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  vendor       Contact?     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@map("expenses")
+}
+
+model Lead {
+  id               String     @id @default(uuid()) @db.Uuid
+  organizationId   String     @map("organization_id") @db.Uuid
+  contactId        String?    @map("contact_id") @db.Uuid
+  unitId           String?    @map("unit_id") @db.Uuid
+  propertyId       String?    @map("property_id") @db.Uuid
+  assignedAgentId  String?    @map("assigned_agent_id") @db.Uuid
+
+  // Lead details
+  status           LeadStatus @default(new)
+  source           LeadSource @default(website)
+  score            Int        @default(0) // Lead scoring 0-100
+  budget           Decimal?   @db.Decimal(12, 2)
+  timeline         String?    // Expected purchase timeline
+  notes            String?
+
+  // Tracking
+  lastContactDate  DateTime?  @map("last_contact_date") @db.Timestamptz
+  nextFollowUpDate DateTime?  @map("next_follow_up_date") @db.Timestamptz
+
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact        Contact?     @relation("ContactLeads", fields: [contactId], references: [id], onDelete: SetNull)
+  unit           Unit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  property       Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  assignedAgent  SalesAgent?  @relation(fields: [assignedAgentId], references: [id], onDelete: SetNull)
+
+  deals          SalesDeal[]
+  appointments   ViewingAppointment[]
+  activities     LeadActivity[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([assignedAgentId])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+model LeadActivity {
+  id        String   @id @default(uuid()) @db.Uuid
+  leadId    String   @map("lead_id") @db.Uuid
+  userId    String   @map("user_id")
+  type      String   // call, email, meeting, note, etc.
+  subject   String?
+  content   String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@map("lead_activities")
+}
+
+model MaintenanceTicket {
+  id                    String         @id @default(uuid()) @db.Uuid
+  organizationId        String         @map("organization_id") @db.Uuid
+  propertyId            String?        @map("property_id") @db.Uuid
+  unitId                String?        @map("unit_id") @db.Uuid
+  title                 String
+  description           String?
+  status                TicketStatus   @default(open)
+  priority              TicketPriority @default(medium)
+  assignedToOrgId       String?        @map("assigned_to_org_id") @db.Uuid
+  assignedToUserId      String?        @map("assigned_to_user_id")
+  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  unit         Unit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  assignedTo   Member?      @relation(fields: [assignedToOrgId, assignedToUserId], references: [organizationId, userId], onDelete: SetNull)
+
+  @@map("maintenance_tickets")
+}
+
+model SalesDeal {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  leadId         String?   @map("lead_id") @db.Uuid
+  unitId         String    @map("unit_id") @db.Uuid
+  buyerId        String    @map("buyer_id") @db.Uuid
+  agentId        String    @map("agent_id") @db.Uuid
+
+  dealNumber     String    @unique @map("deal_number")
+  saleType       SaleType  @default(full_payment) @map("sale_type")
+  salePrice      Decimal   @map("sale_price") @db.Decimal(12, 2)
+
+  // Contract details
+  contractDate   DateTime? @map("contract_date") @db.Date
+  closingDate    DateTime? @map("closing_date") @db.Date
+  status         DealStatus @default(draft)
+
+  // Financial tracking
+  downPayment    Decimal?  @map("down_payment") @db.Decimal(12, 2)
+  financingAmount Decimal? @map("financing_amount") @db.Decimal(12, 2)
+
+  notes          String?
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  unit           Unit         @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  buyer          Contact      @relation("BuyerDeals", fields: [buyerId], references: [id], onDelete: Cascade)
+  agent          SalesAgent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  paymentPlan    PaymentPlan?
+  commissions    Commission[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([agentId])
+  @@index([createdAt])
+  @@map("sales_deals")
+}
+
+model PaymentPlan {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  dealId         String            @unique @map("deal_id") @db.Uuid
+
+  status         PaymentPlanStatus @default(draft)
+  totalAmount    Decimal           @map("total_amount") @db.Decimal(12, 2)
+  downPayment    Decimal           @map("down_payment") @db.Decimal(12, 2)
+  remainingAmount Decimal          @map("remaining_amount") @db.Decimal(12, 2)
+
+  // Plan configuration
+  installmentCount Int             @map("installment_count")
+  installmentAmount Decimal        @map("installment_amount") @db.Decimal(12, 2)
+  frequency      String           @default("monthly") // monthly, quarterly, etc.
+  startDate      DateTime         @map("start_date") @db.Date
+
+  // Late fee configuration
+  lateFeeAmount  Decimal?         @map("late_fee_amount") @db.Decimal(12, 2)
+  gracePeriodDays Int             @default(5) @map("grace_period_days")
+
+  notes          String?
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal           SalesDeal        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  milestones     PaymentMilestone[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([startDate])
+  @@map("payment_plans")
+}
+
+model PaymentMilestone {
+  id              String   @id @default(uuid()) @db.Uuid
+  paymentPlanId   String   @map("payment_plan_id") @db.Uuid
+  milestoneNumber Int      @map("milestone_number")
+
+  amount          Decimal  @db.Decimal(12, 2)
+  dueDate         DateTime @map("due_date") @db.Date
+  isPaid          Boolean  @default(false) @map("is_paid")
+  paidDate        DateTime? @map("paid_date") @db.Date
+  paidAmount      Decimal? @map("paid_amount") @db.Decimal(12, 2)
+
+  // Late fee tracking
+  lateFeeApplied  Boolean  @default(false) @map("late_fee_applied")
+  lateFeeAmount   Decimal? @map("late_fee_amount") @db.Decimal(12, 2)
+
+  invoiceId       String?  @unique @map("invoice_id") @db.Uuid // Make unique for one-to-one relation
+  notes           String?
+
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  paymentPlan   PaymentPlan @relation(fields: [paymentPlanId], references: [id], onDelete: Cascade)
+  invoice       Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([paymentPlanId, milestoneNumber])
+  @@index([paymentPlanId])
+  @@index([dueDate])
+  @@index([isPaid])
+  @@map("payment_milestones")
+}
+
+model Commission {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  dealId         String          @map("deal_id") @db.Uuid
+  agentId        String          @map("agent_id") @db.Uuid
+
+  type           String          @default("sales") // sales, referral, bonus
+  rate           Decimal         @db.Decimal(5, 4) // Commission rate (e.g., 0.03 for 3%)
+  amount         Decimal         @db.Decimal(12, 2)
+  status         CommissionStatus @default(pending)
+
+  // Payment tracking
+  paidDate       DateTime?       @map("paid_date") @db.Date
+  paidAmount     Decimal?        @map("paid_amount") @db.Decimal(12, 2)
+
+  notes          String?
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deal           SalesDeal       @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  agent          SalesAgent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("commissions")
+}
+
+model ViewingAppointment {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  leadId         String            @map("lead_id") @db.Uuid
+  unitId         String            @map("unit_id") @db.Uuid
+  agentId        String?           @map("agent_id") @db.Uuid
+
+  scheduledAt    DateTime          @map("scheduled_at") @db.Timestamptz
+  duration       Int               @default(60) // Duration in minutes
+  status         AppointmentStatus @default(scheduled)
+
+  notes          String?
+  feedback       String?           // Post-appointment feedback
+
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead           Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  unit           Unit              @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  agent          SalesAgent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([leadId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@map("viewing_appointments")
+}
+
+model Invoice {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  number         String        @unique
+  contactId      String?       @map("contact_id") @db.Uuid
+  unitId         String?       @map("unit_id") @db.Uuid
+  issueDate      DateTime      @map("issue_date") @db.Date
+  dueDate        DateTime      @map("due_date") @db.Date
+  currency       String        @default("MAD")
+  subtotal       Decimal       @db.Decimal(12, 2)
+  tax            Decimal       @default(0) @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  status         InvoiceStatus @default(draft)
+  stripePaymentIntentId String? @map("stripe_payment_intent_id")
+
+  // Sales-specific fields
+  dealId            String? @map("deal_id") @db.Uuid
+
+  notes          String?
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?     @map("deleted_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  unit         Unit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  payments     Payment[]
+
+  // Sales relations - one-to-one with PaymentMilestone
+  milestone    PaymentMilestone?
+
+  @@index([organizationId])
+  @@index([status, dueDate])
+  @@index([createdAt])
+  @@index([dealId])
+  @@map("invoices")
+}
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  invoiceId      String        @map("invoice_id") @db.Uuid
+  method         PaymentMethod
+  amount         Decimal       @db.Decimal(12, 2)
+  currency       String        @default("MAD")
+  paidAt         DateTime      @map("paid_at") @db.Timestamptz
+  reference      String?
+  stripePaymentId String?      @map("stripe_payment_id")
+  notes          String?
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+model Document {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  entityType     EntityType       @map("entity_type")
+  entityId       String           @map("entity_id") @db.Uuid
+  filename       String
+  originalName   String           @map("original_name")
+  mimeType       String           @map("mime_type")
+  size           Int
+  storageKey     String           @map("storage_key")
+  version        Int              @default(1)
+  category       DocumentCategory @default(other)
+  tags           String[]         @default([])
+  width          Int?
+  height         Int?
+  expiresAt      DateTime?        @map("expires_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("documents")
+}
+
+model UnitStatusHistory {
+  id           String     @id @default(uuid()) @db.Uuid
+  unitId       String     @map("unit_id") @db.Uuid
+  fromStatus   UnitStatus @map("from_status")
+  toStatus     UnitStatus @map("to_status")
+  changedByUserId String  @map("changed_by_user_id")
+  changedAt    DateTime   @map("changed_at") @db.Timestamptz
+  notes        String?
+
+  unit        Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  changedBy   User @relation(fields: [changedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([unitId, changedAt])
+  @@map("unit_status_history")
+}
+
+model ActivityLog {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @map("organization_id") @db.Uuid
+  entityType     EntityType @map("entity_type")
+  entityId       String     @map("entity_id") @db.Uuid
+  action         String
+  userId         String     @map("user_id")
+  payload        Json       @default("{}") @db.JsonB
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model StripeEvent {
+  id        String   @id
+  type      String
+  payload   Json     @db.JsonB
+  processed Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("stripe_events")
+}
