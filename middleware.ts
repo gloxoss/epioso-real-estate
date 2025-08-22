@@ -1,10 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/middleware'
 import {
   defaultLocale,
   locales,
   isValidLocale,
-  detectLocaleFromHeaders,
   removeLocaleFromPath,
   LOCALE_COOKIE_NAME
 } from '@/lib/i18n/config'
@@ -20,13 +18,11 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/signup') ||
     pathname.includes('.')
   ) {
-    const { supabase, response } = createClient(request)
-    await supabase.auth.getSession()
-    return response
+    return NextResponse.next()
   }
 
   // Handle internationalization
-  const { locale: pathLocale, path: pathWithoutLocale } = removeLocaleFromPath(pathname)
+  const { locale: pathLocale } = removeLocaleFromPath(pathname)
 
   // Get preferred locale from cookie or headers
   const cookieLocale = request.cookies.get(LOCALE_COOKIE_NAME)?.value
@@ -46,9 +42,8 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
-  // Handle Supabase auth
-  const { supabase, response } = createClient(request)
-  await supabase.auth.getSession()
+  // Create response and set locale cookie if needed
+  const response = NextResponse.next()
 
   // Set locale cookie if not set
   if (!cookieLocale || cookieLocale !== pathLocale) {
